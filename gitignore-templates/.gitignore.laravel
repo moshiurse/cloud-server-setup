@@ -1,0 +1,64 @@
+# ============================================
+# .gitignore for Laravel Projects
+# ============================================
+# Copy to your project root as .gitignore
+
+# ---- Dependencies ----
+/vendor
+/node_modules
+
+# ---- Laravel generated ----
+/public/hot
+/public/storage
+/public/build
+/storage/*.key
+/storage/framework/cache/data/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+
+# ---- Environment variables ----
+.env
+.env.backup
+.env.production
+!.env.example
+
+# ---- Logs ----
+/storage/logs/*
+!storage/logs/.gitkeep
+*.log
+
+# ---- IDE ----
+.vscode/
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.phpstorm.meta.php
+_ide_helper.php
+_ide_helper_models.php
+.phpactor.json
+
+# ---- Testing ----
+.phpunit.result.cache
+.phpunit.cache/
+coverage/
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- Mix / Vite compiled assets ----
+/public/css/
+/public/js/
+/public/mix-manifest.json
+/public/build/
+
+# ---- Homestead / Sail ----
+Homestead.json
+Homestead.yaml
+auth.json
+docker-compose.override.yml
+
+# ---- Misc ----
+npm-debug.log
+yarn-error.log

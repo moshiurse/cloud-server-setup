@@ -7,7 +7,7 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 ### Core
 | File | Description |
 |------|-------------|
-| **vps-setup.sh** | Automated VPS setup script (security, Nginx, Node.js, PHP, MySQL) |
+| **vps-setup.sh** | Automated VPS setup script (security, Nginx, Node.js, PHP, MySQL, + optional PostgreSQL, Redis, Docker) |
 | **DEPLOYMENT-GUIDE.md** | Complete step-by-step deployment guide |
 | **CHEATSHEET.md** | Quick reference for common commands |
 | **.env.example** | General environment variables template |
@@ -30,6 +30,10 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [nginx-reactjs.conf](nginx/nginx-reactjs.conf) | React.js static SPA serving |
 | [nginx-php.conf](nginx/nginx-php.conf) | Raw PHP with PHP-FPM |
 | [nginx-laravel.conf](nginx/nginx-laravel.conf) | Laravel with PHP-FPM |
+| [nginx-nestjs.conf](nginx/nginx-nestjs.conf) | NestJS reverse proxy + WebSocket + Swagger |
+| [nginx-websocket.conf](nginx/nginx-websocket.conf) | WebSocket / Socket.IO reverse proxy |
+| [nginx-multi-app.conf](nginx/nginx-multi-app.conf) | Multi-app hosting on one VPS (subdomains) |
+| [security-headers.conf](nginx/security-headers.conf) | Reusable security headers snippet (include file) |
 
 ### CI/CD Workflows (`workflows/`)
 | File | Description |
@@ -40,6 +44,10 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [deploy-php.yml](workflows/deploy-php.yml) | PHP syntax check + deploy |
 | [deploy-laravel.yml](workflows/deploy-laravel.yml) | Laravel test + migrate + deploy |
 | [deploy-docker.yml](workflows/deploy-docker.yml) | Docker build + push + deploy (any project) |
+| [deploy-nestjs.yml](workflows/deploy-nestjs.yml) | NestJS lint + test + PM2 deploy |
+| [deploy-nestjs-docker.yml](workflows/deploy-nestjs-docker.yml) | NestJS Docker build + GHCR push + zero-downtime deploy |
+| [reusable-deploy.yml](workflows/reusable-deploy.yml) | Reusable workflow (callable by any project) |
+| [example-caller.yml](workflows/example-caller.yml) | Example: how to call the reusable workflow |
 
 ### PM2 Process Manager (`pm2/`)
 | File | Description |
@@ -65,6 +73,28 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [MONITORING-GUIDE.md](docs/MONITORING-GUIDE.md) | PM2/Nginx monitoring, UptimeRobot, alerts |
 | [LOG-ROTATION-GUIDE.md](docs/LOG-ROTATION-GUIDE.md) | PM2/Nginx/system log rotation, cleanup scripts |
 | [SWAP-SETUP-GUIDE.md](docs/SWAP-SETUP-GUIDE.md) | Swap file setup for low-RAM VPS servers |
+| [REDIS-GUIDE.md](docs/REDIS-GUIDE.md) | Redis installation, security, persistence, framework integration |
+
+### Scripts (`scripts/`)
+| File | Description |
+|------|-------------|
+| [backup.sh](scripts/backup.sh) | Automated DB + file backup & restore (MySQL, PostgreSQL, Docker, S3 upload) |
+
+### .dockerignore Templates (`docker/dockerignore/`)
+| File | Description |
+|------|-------------|
+| [.dockerignore.node](docker/dockerignore/.dockerignore.node) | Node.js / Next.js / NestJS projects |
+| [.dockerignore.php](docker/dockerignore/.dockerignore.php) | PHP / Laravel projects |
+
+### .gitignore Templates (`gitignore-templates/`)
+| File | Description |
+|------|-------------|
+| [.gitignore.nodejs](gitignore-templates/.gitignore.nodejs) | Node.js (Express/Fastify) |
+| [.gitignore.nextjs](gitignore-templates/.gitignore.nextjs) | Next.js |
+| [.gitignore.reactjs](gitignore-templates/.gitignore.reactjs) | React (CRA + Vite) |
+| [.gitignore.nestjs](gitignore-templates/.gitignore.nestjs) | NestJS |
+| [.gitignore.php](gitignore-templates/.gitignore.php) | Raw PHP |
+| [.gitignore.laravel](gitignore-templates/.gitignore.laravel) | Laravel |
 
 ### Docker (`docker/`)
 | File | Description |
@@ -143,6 +173,11 @@ See **DEPLOYMENT-GUIDE.md** for detailed instructions.
 - Node.js 20
 - PHP 8.2
 - MySQL
+
+✅ **Optional Installs**
+- PostgreSQL 16
+- Redis (caching & queues)
+- Docker CE + Compose
 
 ✅ **Tools**
 - PM2 (process manager)

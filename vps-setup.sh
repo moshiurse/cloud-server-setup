@@ -3,8 +3,9 @@
 #############################################
 # VPS Auto Setup Script
 # This script sets up a fresh Ubuntu VPS with:
-# - Security hardening
+# - Security hardening (SSH, UFW, Fail2Ban)
 # - Nginx, PHP, MySQL, Node.js, PM2
+# - Optional: PostgreSQL, Redis, Docker CE
 # - SSL with Certbot
 # - CI/CD setup
 # - Firewall configuration
@@ -26,6 +27,18 @@ YOUR_EMAIL=""                   # Your email for SSL cert
 MYSQL_ROOT_PASSWORD=""          # MySQL root password (will generate if empty)
 NODE_VERSION="20"               # Node.js version
 PHP_VERSION="8.2"               # PHP version
+
+# Optional Installs — set to "true" to enable
+INSTALL_POSTGRESQL=false        # PostgreSQL (set to true if needed instead of/alongside MySQL)
+POSTGRESQL_VERSION="16"         # PostgreSQL version
+POSTGRESQL_DB="myapp_db"        # Default database name
+POSTGRESQL_USER="myapp_user"    # Default database user
+POSTGRESQL_PASSWORD=""          # Will generate if empty
+
+INSTALL_REDIS=true              # Redis (recommended for caching/queues)
+REDIS_PASSWORD=""               # Redis password (will generate if empty)
+
+INSTALL_DOCKER=false            # Docker CE + Docker Compose
 
 #############################################
 # Helper Functions
@@ -241,6 +254,82 @@ systemctl start mysql
 print_status "MySQL installed and secured"
 
 #############################################
+# 8b. Install PostgreSQL (Optional)
+#############################################
+
+if [ "$INSTALL_POSTGRESQL" = "true" ]; then
+    print_status "Installing PostgreSQL $POSTGRESQL_VERSION..."
+
+    # Add PostgreSQL APT repository
+    sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+    apt update
+
+    apt install -y postgresql-$POSTGRESQL_VERSION postgresql-client-$POSTGRESQL_VERSION
+
+    systemctl enable postgresql
+    systemctl start postgresql
+
+    # Generate password if not set
+    if [ -z "$POSTGRESQL_PASSWORD" ]; then
+        POSTGRESQL_PASSWORD=$(openssl rand -base64 32)
+        print_warning "Generated PostgreSQL password for $POSTGRESQL_USER"
+        echo "PostgreSQL User: $POSTGRESQL_USER" >> /root/credentials.txt
+        echo "PostgreSQL Password: $POSTGRESQL_PASSWORD" >> /root/credentials.txt
+        echo "PostgreSQL Database: $POSTGRESQL_DB" >> /root/credentials.txt
+    fi
+
+    # Create database and user
+    sudo -u postgres psql <<EOF
+CREATE USER $POSTGRESQL_USER WITH PASSWORD '$POSTGRESQL_PASSWORD';
+CREATE DATABASE $POSTGRESQL_DB OWNER $POSTGRESQL_USER;
+GRANT ALL PRIVILEGES ON DATABASE $POSTGRESQL_DB TO $POSTGRESQL_USER;
+\q
+EOF
+
+    # Allow password auth for local connections
+    PG_HBA="/etc/postgresql/$POSTGRESQL_VERSION/main/pg_hba.conf"
+    sed -i 's/local\s\+all\s\+all\s\+peer/local   all             all                                     md5/' "$PG_HBA"
+
+    systemctl restart postgresql
+
+    print_status "PostgreSQL $POSTGRESQL_VERSION installed (user: $POSTGRESQL_USER, db: $POSTGRESQL_DB)"
+fi
+
+#############################################
+# 8c. Install Redis (Optional)
+#############################################
+
+if [ "$INSTALL_REDIS" = "true" ]; then
+    print_status "Installing Redis..."
+
+    apt install -y redis-server
+
+    # Generate password if not set
+    if [ -z "$REDIS_PASSWORD" ]; then
+        REDIS_PASSWORD=$(openssl rand -base64 32)
+        print_warning "Generated Redis password"
+        echo "Redis Password: $REDIS_PASSWORD" >> /root/credentials.txt
+    fi
+
+    # Configure Redis
+    sed -i 's/^supervised no/supervised systemd/' /etc/redis/redis.conf
+    sed -i 's/^bind .*/bind 127.0.0.1 ::1/' /etc/redis/redis.conf
+    sed -i "s/^# requirepass .*/requirepass $REDIS_PASSWORD/" /etc/redis/redis.conf
+
+    # Set max memory (25% of total RAM)
+    TOTAL_RAM_MB=$(free -m | awk '/^Mem:/ {print $2}')
+    REDIS_MAX_MEM=$((TOTAL_RAM_MB / 4))
+    sed -i "s/^# maxmemory .*/maxmemory ${REDIS_MAX_MEM}mb/" /etc/redis/redis.conf
+    sed -i 's/^# maxmemory-policy .*/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
+
+    systemctl enable redis-server
+    systemctl restart redis-server
+
+    print_status "Redis installed (password-protected, max ${REDIS_MAX_MEM}MB)"
+fi
+
+#############################################
 # 9. Install Node.js & NPM
 #############################################
 
@@ -273,6 +362,57 @@ print_status "Installing Certbot..."
 apt install -y certbot python3-certbot-nginx
 
 print_status "Certbot installed"
+
+#############################################
+# 11b. Install Docker CE (Optional)
+#############################################
+
+if [ "$INSTALL_DOCKER" = "true" ]; then
+    print_status "Installing Docker CE..."
+
+    # Remove old Docker versions
+    apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+
+    # Install prerequisites
+    apt install -y ca-certificates gnupg lsb-release
+
+    # Add Docker GPG key and repository
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    # Add deploy user to docker group (no sudo needed for docker)
+    usermod -aG docker $NEW_USERNAME
+
+    # Enable and start Docker
+    systemctl enable docker
+    systemctl start docker
+
+    # Configure Docker logging (prevent disk fill)
+    mkdir -p /etc/docker
+    cat > /etc/docker/daemon.json <<EOF
+{
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+    },
+    "storage-driver": "overlay2"
+}
+EOF
+
+    systemctl restart docker
+
+    print_status "Docker CE $(docker --version | awk '{print $3}') installed"
+    print_status "Docker Compose $(docker compose version --short) installed"
+fi
 
 if [ -n "$YOUR_DOMAIN" ] && [ -n "$YOUR_EMAIL" ]; then
     print_status "Setting up SSL for $YOUR_DOMAIN..."
@@ -415,6 +555,16 @@ echo "✓ MySQL installed"
 echo "✓ Node.js $(node -v) installed"
 echo "✓ PM2 installed"
 echo "✓ Certbot installed"
+
+if [ "$INSTALL_POSTGRESQL" = "true" ]; then
+    echo "✓ PostgreSQL $POSTGRESQL_VERSION installed (user: $POSTGRESQL_USER)"
+fi
+if [ "$INSTALL_REDIS" = "true" ]; then
+    echo "✓ Redis installed (password-protected)"
+fi
+if [ "$INSTALL_DOCKER" = "true" ]; then
+    echo "✓ Docker CE + Compose installed"
+fi
 echo ""
 echo "=========================================="
 echo "Important Information:"

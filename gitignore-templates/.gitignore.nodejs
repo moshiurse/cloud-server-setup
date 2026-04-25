@@ -1,0 +1,63 @@
+# ============================================
+# .gitignore for Node.js Projects
+# ============================================
+# Works with: Express, Fastify, Koa, Hapi, etc.
+# Copy to your project root as .gitignore
+
+# ---- Dependencies ----
+node_modules/
+package-lock.json    # Uncomment if you want to track lockfile (recommended for apps)
+
+# ---- Build output ----
+dist/
+build/
+out/
+
+# ---- Environment variables ----
+.env
+.env.local
+.env.*.local
+# Keep the example
+!.env.example
+
+# ---- Logs ----
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ---- Testing ----
+coverage/
+.nyc_output/
+*.lcov
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---- IDE / Editor ----
+.vscode/
+!.vscode/settings.json    # Optionally keep shared settings
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ---- Docker ----
+# Uncomment if Docker files shouldn't be tracked
+# Dockerfile
+# docker-compose*.yml
+# .dockerignore
+
+# ---- Misc ----
+tmp/
+temp/
+.cache/
+*.pid
+*.seed

@@ -1,0 +1,64 @@
+# ============================================
+# .dockerignore for Node.js / Next.js / NestJS
+# ============================================
+# Prevents unnecessary files from being sent to the Docker build context
+# Copy this to your project root as .dockerignore
+
+# Dependencies (installed inside container)
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output (rebuilt inside container)
+dist
+build
+.next
+.nuxt
+out
+
+# Environment files (use Docker env vars instead)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage
+.nyc_output
+jest.config.*
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.circleci
+
+# Docker (avoid recursive copy)
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation
+*.md
+LICENSE
+docs
+
+# Misc
+*.log
+tmp
+temp

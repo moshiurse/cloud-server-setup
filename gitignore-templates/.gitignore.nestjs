@@ -1,0 +1,49 @@
+# ============================================
+# .gitignore for NestJS Projects
+# ============================================
+# Copy to your project root as .gitignore
+
+# ---- Dependencies ----
+node_modules/
+
+# ---- Build output ----
+dist/
+
+# ---- Environment variables ----
+.env
+.env.*
+!.env.example
+
+# ---- Logs ----
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ---- Testing ----
+coverage/
+.nyc_output/
+test-report.xml
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- IDE ----
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ---- TypeScript ----
+*.tsbuildinfo
+
+# ---- Prisma ----
+# prisma/migrations/   # Uncomment ONLY if you don't want to track migrations (not recommended)
+
+# ---- Misc ----
+.cache/
+tmp/

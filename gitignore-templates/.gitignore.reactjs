@@ -1,0 +1,43 @@
+# ============================================
+# .gitignore for React.js Projects (CRA + Vite)
+# ============================================
+# Copy to your project root as .gitignore
+
+# ---- Dependencies ----
+node_modules/
+
+# ---- Build output ----
+build/         # Create React App
+dist/          # Vite
+
+# ---- Environment variables ----
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# ---- Logs ----
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# ---- Testing ----
+coverage/
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- IDE ----
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ---- Misc ----
+.cache/

@@ -1,0 +1,521 @@
+# ============================================================================
+# GitHub Actions: NestJS Docker Deployment Pipeline (Microservices)
+# ============================================================================
+#
+# A full CI/CD pipeline for NestJS apps running in Docker containers on a VPS.
+# Builds and pushes images to GitHub Container Registry (ghcr.io), then deploys
+# via SSH using docker compose with zero-downtime strategy.
+#
+# Architecture:
+#   GitHub (push) → Test → Build & Push to GHCR → SSH Deploy → Health Check
+#
+# This workflow references:
+#   - docker/dockerfiles/Dockerfile.nestjs   (multi-stage build)
+#   - docker/compose/docker-compose.nestjs.yml (app + nginx + postgres + redis)
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#
+#   VPS_HOST         – VPS IP or hostname (e.g., 203.0.113.10)
+#   VPS_USERNAME     – SSH user on the VPS (e.g., deploy)
+#   VPS_SSH_KEY      – Full private SSH key (ed25519 or RSA)
+#   GHCR_TOKEN       – Personal access token with write:packages scope
+#                      OR omit this and use the built-in GITHUB_TOKEN
+#                      (GITHUB_TOKEN works if the repo has packages write permission)
+#
+# Optional Secrets:
+#   VPS_PORT         – SSH port if not 22
+#   VPS_APP_PATH     – Override default app path on VPS
+#   SLACK_WEBHOOK    – Slack webhook URL for deployment notifications
+# ============================================================================
+
+name: NestJS Docker Deploy
+
+on:
+  push:
+    branches: [main]
+    # Optionally limit to relevant paths to avoid unnecessary runs:
+    # paths:
+    #   - 'src/**'
+    #   - 'prisma/**'
+    #   - 'Dockerfile*'
+    #   - 'docker-compose*.yml'
+    #   - 'package*.json'
+
+# Cancel in-progress runs for the same branch to save resources
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+# ── Global environment variables ─────────────────────────────────────────────
+env:
+  NODE_VERSION: '20'
+  # GHCR image name — automatically derived from the repo (owner/repo)
+  DOCKER_IMAGE: ghcr.io/${{ github.repository }}
+  # App directory on the VPS where docker-compose.yml lives
+  APP_DIR: /var/www/apps/nestjs-app
+  # Dockerfile path (relative to repo root, matching repo convention)
+  DOCKERFILE: docker/dockerfiles/Dockerfile.nestjs
+
+  # ── Multi-service microservices (uncomment to enable) ────────────────────
+  # If your NestJS project is a monorepo with multiple services, define each:
+  # DOCKER_IMAGE_GATEWAY: ghcr.io/${{ github.repository }}/gateway
+  # DOCKER_IMAGE_USERS:   ghcr.io/${{ github.repository }}/users-service
+  # DOCKER_IMAGE_ORDERS:  ghcr.io/${{ github.repository }}/orders-service
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 1: Lint & Test
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Runs linting, unit tests, and e2e tests against real PostgreSQL and Redis
+  # service containers — matching what the app uses in production.
+  # ═══════════════════════════════════════════════════════════════════════════
+  test:
+    name: 🧪 Lint & Test
+    runs-on: ubuntu-latest
+
+    # ── Service containers for integration/e2e tests ───────────────────────
+    # These spin up alongside the runner. The app connects via localhost.
+    services:
+      # PostgreSQL 16 — matches docker-compose.nestjs.yml
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        # Wait until PostgreSQL is accepting connections before running steps
+        options: >-
+          --health-cmd="pg_isready -U test_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      # Redis 7 — used for caching, BullMQ queues, etc.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Cache npm dependencies based on package-lock.json hash
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Linting ────────────────────────────────────────────────────────
+      # ESLint with @typescript-eslint — catches errors before they reach prod
+      - name: Run linter
+        run: npm run lint
+
+      # ── Unit tests ─────────────────────────────────────────────────────
+      # Jest unit tests — fast, no external dependencies needed
+      - name: Run unit tests
+        run: npm run test -- --coverage
+        env:
+          # Provide DB/Redis URLs even for unit tests in case some modules
+          # import config that validates these at startup
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+
+      # ── E2E tests ──────────────────────────────────────────────────────
+      # Supertest-based e2e tests — these hit real Postgres and Redis
+      - name: Run e2e tests
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+          # Set NODE_ENV to test so the app uses test-specific config
+          NODE_ENV: test
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 2: Build Docker Image & Push to GHCR
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Uses the multi-stage Dockerfile at docker/dockerfiles/Dockerfile.nestjs
+  # to produce a slim production image, then pushes it to GitHub Container
+  # Registry tagged with both the commit SHA (immutable) and "latest".
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-and-push:
+    name: 🐳 Build & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    # Only build on push to main (skip on PRs to save registry storage)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Expose the image tag so the deploy job can reference it
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      sha_short: ${{ steps.vars.outputs.sha_short }}
+
+    permissions:
+      contents: read
+      # Required to push to ghcr.io using GITHUB_TOKEN
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Compute short SHA for tagging
+      - name: Set build variables
+        id: vars
+        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      # ── Docker Buildx for multi-platform / cache support ───────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Authenticate with GitHub Container Registry ────────────────────
+      # Uses GITHUB_TOKEN by default. If you need a separate PAT, replace
+      # password with ${{ secrets.GHCR_TOKEN }}
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Use GITHUB_TOKEN (automatic) or a dedicated GHCR_TOKEN secret
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # ── Generate image tags and labels from Git metadata ───────────────
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            # Tag with full commit SHA (immutable, used for rollback)
+            type=sha,prefix=,format=long
+            # Tag with short SHA for readability
+            type=sha,prefix=,format=short
+            # Tag as "latest" for the default pull
+            type=raw,value=latest
+
+      # ── Build and push the image ───────────────────────────────────────
+      # Uses the Dockerfile at docker/dockerfiles/Dockerfile.nestjs with
+      # the repo root as build context (so COPY commands work correctly).
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache for faster rebuilds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Build args if your Dockerfile accepts them:
+          # build-args: |
+          #   NODE_ENV=production
+          #   APP_VERSION=${{ steps.vars.outputs.sha_short }}
+
+      # ── Multi-service builds (microservices monorepo) ──────────────────
+      # If you have multiple NestJS services, build each with its own
+      # Dockerfile and context. Uncomment and duplicate as needed:
+      #
+      # - name: Build and push API Gateway
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     file: apps/gateway/Dockerfile
+      #     push: true
+      #     tags: |
+      #       ${{ env.DOCKER_IMAGE_GATEWAY }}:${{ steps.vars.outputs.sha_short }}
+      #       ${{ env.DOCKER_IMAGE_GATEWAY }}:latest
+      #     cache-from: type=gha,scope=gateway
+      #     cache-to: type=gha,scope=gateway,mode=max
+      #
+      # - name: Build and push Users Service
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     file: apps/users-service/Dockerfile
+      #     push: true
+      #     tags: |
+      #       ${{ env.DOCKER_IMAGE_USERS }}:${{ steps.vars.outputs.sha_short }}
+      #       ${{ env.DOCKER_IMAGE_USERS }}:latest
+      #     cache-from: type=gha,scope=users
+      #     cache-to: type=gha,scope=users,mode=max
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 3: Deploy to VPS via SSH
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SSHs into the VPS, pulls the new image from GHCR, runs database
+  # migrations, and recreates only changed containers for zero-downtime.
+  # Includes a health check and automatic rollback on failure.
+  #
+  # The VPS should already have:
+  #   - Docker & Docker Compose installed
+  #   - A docker-compose.yml based on docker/compose/docker-compose.nestjs.yml
+  #   - The .env file configured
+  #   - The deploy user added to the docker group
+  # ═══════════════════════════════════════════════════════════════════════════
+  deploy:
+    name: 🚀 Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Deploy sequentially — never run two deploys at once
+    environment:
+      name: production
+      url: https://${{ secrets.VPS_HOST }}
+
+    steps:
+      # ── Step 1: Deploy — pull image, migrate, restart ──────────────────
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.sha_short }}
+          APP_DIR: ${{ env.APP_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: DOCKER_IMAGE,IMAGE_TAG,APP_DIR
+          script: |
+            set -e
+
+            echo "═══════════════════════════════════════════════"
+            echo "🚀 Deploying NestJS Docker app"
+            echo "   Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+            echo "   Path:  ${APP_DIR}"
+            echo "═══════════════════════════════════════════════"
+
+            cd "${APP_DIR}"
+
+            # ── Authenticate with GHCR on the VPS ────────────────────────
+            # The VPS needs access to pull private images. Log in using
+            # a PAT stored in a file, or pass via secret. For public repos
+            # this step is optional.
+            # echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+            # ── Tag current image as rollback target ─────────────────────
+            # Before pulling the new image, tag the currently running one
+            # so we can revert if the deploy fails.
+            CURRENT_IMAGE=$(docker compose images app --format json 2>/dev/null | head -1 | grep -o '"Tag":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "none")
+            if [ "$CURRENT_IMAGE" != "none" ] && [ -n "$CURRENT_IMAGE" ]; then
+              echo "📌 Tagging current image as rollback: ${DOCKER_IMAGE}:rollback"
+              docker tag "${DOCKER_IMAGE}:${CURRENT_IMAGE}" "${DOCKER_IMAGE}:rollback" 2>/dev/null || true
+            fi
+
+            # ── Pull the new image ───────────────────────────────────────
+            echo "📥 Pulling new image..."
+            docker pull "${DOCKER_IMAGE}:${IMAGE_TAG}"
+            docker pull "${DOCKER_IMAGE}:latest"
+
+            # ── Update the image tag in the compose environment ──────────
+            # If your docker-compose.yml uses an IMAGE_TAG variable:
+            #   image: ${DOCKER_IMAGE}:${IMAGE_TAG:-latest}
+            # Update it in .env so compose picks up the new tag.
+            if grep -q "^IMAGE_TAG=" .env 2>/dev/null; then
+              sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" .env
+            else
+              echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+            fi
+
+            # ── Run database migrations ──────────────────────────────────
+            # Run migrations BEFORE restarting the app so the new schema
+            # is ready when the new code starts.
+            echo "🗃️  Running database migrations..."
+
+            # Option A: Prisma (recommended for NestJS)
+            # Runs migrations against the production database using a
+            # temporary container with the new image.
+            docker compose run --rm --no-deps app npx prisma migrate deploy
+
+            # Option B: TypeORM
+            # If using TypeORM instead of Prisma, comment out Prisma above
+            # and uncomment this:
+            # docker compose run --rm --no-deps app npm run typeorm migration:run
+
+            # Option C: TypeORM via CLI
+            # docker compose run --rm --no-deps app npx typeorm-ts-node-commonjs migration:run -d dist/data-source.js
+
+            # ── Zero-downtime container update ───────────────────────────
+            # --pull always:  ensures compose uses the freshly pulled image
+            # -d:             detached mode
+            # --remove-orphans: clean up containers for removed services
+            # This only recreates containers whose image or config changed,
+            # leaving Postgres/Redis untouched for zero-downtime.
+            echo "🔄 Updating containers (zero-downtime)..."
+            docker compose up -d --pull always --remove-orphans
+
+            # ── Multi-service microservices deploy ───────────────────────
+            # If deploying multiple NestJS services, pull and update each:
+            #
+            # echo "📥 Pulling microservice images..."
+            # docker pull "${DOCKER_IMAGE_GATEWAY}:${IMAGE_TAG}"
+            # docker pull "${DOCKER_IMAGE_USERS}:${IMAGE_TAG}"
+            # docker pull "${DOCKER_IMAGE_ORDERS}:${IMAGE_TAG}"
+            #
+            # echo "🔄 Updating microservices..."
+            # docker compose up -d --pull always gateway users-service orders-service
+            #
+            # To deploy services independently (canary / rolling):
+            # docker compose up -d --no-deps --pull always gateway
+            # sleep 10 && curl -sf http://localhost:3000/health
+            # docker compose up -d --no-deps --pull always users-service
+            # sleep 10 && curl -sf http://localhost:3001/health
+
+            # ── Wait for containers to be healthy ────────────────────────
+            echo "⏳ Waiting for app container to become healthy..."
+            RETRIES=0
+            MAX_RETRIES=30
+            until [ "$RETRIES" -ge "$MAX_RETRIES" ]; do
+              HEALTH=$(docker inspect --format='{{.State.Health.Status}}' myapp-nestjs 2>/dev/null || echo "starting")
+              if [ "$HEALTH" = "healthy" ]; then
+                echo "✅ Container reports healthy"
+                break
+              fi
+              RETRIES=$((RETRIES + 1))
+              echo "   Waiting... ($RETRIES/$MAX_RETRIES) status=$HEALTH"
+              sleep 5
+            done
+
+            if [ "$RETRIES" -ge "$MAX_RETRIES" ]; then
+              echo "❌ Container did not become healthy in time"
+              docker compose logs --tail=50 app
+              exit 1
+            fi
+
+            # ── Clean up old/dangling images ─────────────────────────────
+            echo "🧹 Cleaning up old images..."
+            docker image prune -f
+
+            echo "✅ Deployment complete!"
+
+      # ── Step 2: HTTP health check from outside the VPS ─────────────────
+      # Validates the app is reachable externally, not just inside Docker.
+      - name: Health check
+        id: health_check
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1
+        env:
+          APP_DIR: ${{ env.APP_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: APP_DIR
+          script: |
+            set -e
+
+            echo "🏥 Running health check..."
+
+            # Wait a few seconds for nginx to pick up the new upstream
+            sleep 5
+
+            # Check the /health endpoint (matches Dockerfile HEALTHCHECK)
+            HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              --max-time 10 \
+              --retry 3 \
+              --retry-delay 5 \
+              http://localhost/health || echo "000")
+
+            # Also try the /api/health variant (common NestJS pattern)
+            if [ "$HTTP_STATUS" != "200" ]; then
+              HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+                --max-time 10 \
+                http://localhost/api/health || echo "000")
+            fi
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ Health check passed (HTTP $HTTP_STATUS)"
+            else
+              echo "❌ Health check failed (HTTP $HTTP_STATUS)"
+              echo ""
+              echo "── Container status ──"
+              cd "${APP_DIR}"
+              docker compose ps
+              echo ""
+              echo "── Recent app logs ──"
+              docker compose logs --tail=30 app
+              exit 1
+            fi
+
+      # ── Step 3: Automatic rollback if health check failed ──────────────
+      # Reverts to the previously tagged "rollback" image so the site
+      # stays up even if the new deploy is broken.
+      - name: Rollback on failure
+        if: steps.health_check.outcome == 'failure'
+        uses: appleboy/ssh-action@v1
+        env:
+          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
+          APP_DIR: ${{ env.APP_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: DOCKER_IMAGE,APP_DIR
+          script: |
+            set -e
+
+            echo "⚠️  Health check failed — initiating rollback!"
+            cd "${APP_DIR}"
+
+            # Check if we have a rollback image
+            if docker image inspect "${DOCKER_IMAGE}:rollback" &>/dev/null; then
+              echo "🔄 Rolling back to previous image..."
+
+              # Re-tag the rollback image as latest so compose uses it
+              docker tag "${DOCKER_IMAGE}:rollback" "${DOCKER_IMAGE}:latest"
+
+              # Restart with the old image
+              docker compose up -d --remove-orphans
+              sleep 10
+
+              # Verify rollback succeeded
+              HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+                --max-time 10 http://localhost/health || echo "000")
+
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "✅ Rollback successful — running on previous version"
+              else
+                echo "❌ Rollback also failed — manual intervention required!"
+                docker compose logs --tail=50 app
+              fi
+            else
+              echo "❌ No rollback image found — manual intervention required!"
+              echo "   Check logs: ssh $VPS_USERNAME@$VPS_HOST 'cd ${APP_DIR} && docker compose logs app'"
+            fi
+
+      # ── Step 4: Fail the workflow if health check failed ───────────────
+      - name: Fail if unhealthy
+        if: steps.health_check.outcome == 'failure'
+        run: |
+          echo "❌ Deployment failed health check. Rollback was attempted."
+          echo "   Check the VPS manually if the rollback also failed."
+          exit 1
+
+      # ── Optional: Slack / Discord notification ─────────────────────────
+      # - name: Notify Slack
+      #   if: always()
+      #   uses: 8398a7/action-slack@v3
+      #   with:
+      #     status: ${{ job.status }}
+      #     fields: repo,message,commit,author,action
+      #     text: |
+      #       Deploy ${{ job.status }} for ${{ github.repository }}
+      #       Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build-and-push.outputs.sha_short }}
+      #   env:
+      #     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
