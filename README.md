@@ -1,16 +1,68 @@
-# VPS Deployment Kit for Next.js
+# VPS Deployment Kit
 
-Complete automation for deploying Next.js apps on a VPS with one script.
+Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Laravel) on a VPS with one script.
 
 ## 📦 What's Included
 
-1. **vps-setup.sh** - Automated VPS setup script
-2. **DEPLOYMENT-GUIDE.md** - Complete step-by-step guide
-3. **CHEATSHEET.md** - Quick reference for common commands
-4. **nginx/** - Nginx configuration templates (Next.js, PHP, Node.js, React.js)
-5. **workflows/** - GitHub Actions CI/CD pipelines (React, Node.js, PHP, Laravel)
-6. **.github-workflows-deploy.yml** - GitHub Actions CI/CD workflow (Next.js)
-7. **ssl/** - SSL/TLS certificate guides (setup, wildcard, troubleshooting)
+### Core
+| File | Description |
+|------|-------------|
+| **vps-setup.sh** | Automated VPS setup script (security, Nginx, Node.js, PHP, MySQL) |
+| **DEPLOYMENT-GUIDE.md** | Complete step-by-step deployment guide |
+| **CHEATSHEET.md** | Quick reference for common commands |
+| **.env.example** | General environment variables template |
+
+### Environment Templates (`env-examples/`)
+| File | Description |
+|------|-------------|
+| [.env.example.laravel](env-examples/.env.example.laravel) | Laravel — DB, cache, queue, mail, Socialite, Stripe, S3, Reverb |
+| [.env.example.php](env-examples/.env.example.php) | Raw PHP — PDO, sessions, uploads, CORS, rate limiting |
+| [.env.example.nodejs](env-examples/.env.example.nodejs) | Node.js — Express/Fastify/Koa, JWT, Passport, BullMQ |
+| [.env.example.nextjs](env-examples/.env.example.nextjs) | Next.js — NextAuth, NEXT_PUBLIC_ vars, Clerk, Stripe, CMS |
+| [.env.example.reactjs](env-examples/.env.example.reactjs) | React — CRA (REACT_APP_) + Vite (VITE_), Firebase, Auth0 |
+| [.env.example.nestjs](env-examples/.env.example.nestjs) | NestJS — TypeORM/Prisma, Bull queues, microservices, Swagger |
+
+### Nginx Configs (`nginx/`)
+| File | Description |
+|------|-------------|
+| [nginx-nextjs.conf](nginx/nginx-nextjs.conf) | Next.js reverse proxy |
+| [nginx-nodejs.conf](nginx/nginx-nodejs.conf) | Node.js (Express/Fastify/Koa) reverse proxy |
+| [nginx-reactjs.conf](nginx/nginx-reactjs.conf) | React.js static SPA serving |
+| [nginx-php.conf](nginx/nginx-php.conf) | Raw PHP with PHP-FPM |
+| [nginx-laravel.conf](nginx/nginx-laravel.conf) | Laravel with PHP-FPM |
+
+### CI/CD Workflows (`workflows/`)
+| File | Description |
+|------|-------------|
+| [deploy-nextjs.yml](workflows/deploy-nextjs.yml) | Next.js build + PM2 deploy |
+| [deploy-nodejs.yml](workflows/deploy-nodejs.yml) | Node.js test + PM2 deploy |
+| [deploy-reactjs.yml](workflows/deploy-reactjs.yml) | React build + static upload |
+| [deploy-php.yml](workflows/deploy-php.yml) | PHP syntax check + deploy |
+| [deploy-laravel.yml](workflows/deploy-laravel.yml) | Laravel test + migrate + deploy |
+
+### PM2 Process Manager (`pm2/`)
+| File | Description |
+|------|-------------|
+| [ecosystem-nodejs.config.js](pm2/ecosystem-nodejs.config.js) | Node.js (cluster mode) |
+| [ecosystem-nextjs.config.js](pm2/ecosystem-nextjs.config.js) | Next.js (fork mode + standalone) |
+| [ecosystem-nestjs.config.js](pm2/ecosystem-nestjs.config.js) | NestJS (cluster + microservices) |
+
+### SSL Guides (`ssl/`)
+| File | Description |
+|------|-------------|
+| [SSL-SETUP-GUIDE.md](ssl/SSL-SETUP-GUIDE.md) | Certbot install, Nginx/Apache SSL, auto-renewal |
+| [SSL-WILDCARD-AND-MULTI-DOMAIN.md](ssl/SSL-WILDCARD-AND-MULTI-DOMAIN.md) | Wildcard certs, Cloudflare/DigitalOcean DNS plugins |
+| [SSL-TROUBLESHOOTING.md](ssl/SSL-TROUBLESHOOTING.md) | Fix common SSL errors, hardening for A+ rating |
+
+### Guides (`docs/`)
+| File | Description |
+|------|-------------|
+| [DATABASE-GUIDE.md](docs/DATABASE-GUIDE.md) | MySQL + PostgreSQL setup, backups, tuning, migrations |
+| [DOMAIN-DNS-GUIDE.md](docs/DOMAIN-DNS-GUIDE.md) | DNS records, domain setup, Cloudflare proxy |
+| [FIREWALL-SECURITY-GUIDE.md](docs/FIREWALL-SECURITY-GUIDE.md) | UFW, Fail2Ban, SSH hardening, Nginx security |
+| [MONITORING-GUIDE.md](docs/MONITORING-GUIDE.md) | PM2/Nginx monitoring, UptimeRobot, alerts |
+| [LOG-ROTATION-GUIDE.md](docs/LOG-ROTATION-GUIDE.md) | PM2/Nginx/system log rotation, cleanup scripts |
+| [SWAP-SETUP-GUIDE.md](docs/SWAP-SETUP-GUIDE.md) | Swap file setup for low-RAM VPS servers |
 
 ## 🚀 Quick Start
 

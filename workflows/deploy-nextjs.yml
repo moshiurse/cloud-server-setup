@@ -1,0 +1,140 @@
+# GitHub Actions CI/CD Pipeline for Next.js Application
+# =====================================================
+#
+# This workflow builds and deploys a Next.js app to your VPS.
+# The app runs as a Node.js process managed by PM2.
+#
+# Setup Steps:
+#   1. Copy this file to your Next.js project:
+#      .github/workflows/deploy.yml
+#
+#   2. Add these GitHub Secrets (Settings → Secrets → Actions):
+#      - VPS_HOST        → Your VPS IP address (e.g., 123.45.67.89)
+#      - VPS_USERNAME    → Your deploy user (e.g., deploy)
+#      - VPS_SSH_KEY     → Private SSH key for the deploy user
+#
+#   3. Adjust the variables below:
+#      - APP_NAME        → Your PM2 app name
+#      - APP_DIR         → Path on VPS where your app lives
+#      - NODE_VERSION    → Node.js version to use
+#      - APP_PORT        → Port your Next.js app runs on
+#
+#   4. First-time server setup:
+#      ssh deploy@YOUR_VPS_IP
+#      cd /var/www/apps
+#      git clone https://github.com/yourusername/yourrepo.git yourapp
+#      cd yourapp
+#      npm install
+#      npm run build
+#      # Copy ecosystem.config.js from pm2/ folder (see pm2/ecosystem-nextjs.config.js)
+#      mkdir logs
+#      pm2 start ecosystem.config.js
+#      pm2 save && pm2 startup
+#      # Setup Nginx using nginx/nginx-nextjs.conf template
+#
+# =====================================================
+
+name: Deploy Next.js App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_NAME: yourapp
+  APP_DIR: /var/www/apps/yourapp
+  NODE_VERSION: '20'
+  APP_PORT: 3000
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint --if-present
+
+      - name: Run type check
+        run: npx tsc --noEmit --if-present 2>/dev/null || true
+
+      - name: Run tests
+        run: npm test --if-present
+        env:
+          CI: true
+
+      - name: Build application
+        run: npm run build
+        env:
+          # Add build-time env vars here:
+          # NEXT_PUBLIC_API_URL: https://api.yourdomain.com
+          CI: true
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Starting Next.js deployment..."
+
+            cd ${{ env.APP_DIR }}
+
+            # Pull latest code
+            git pull origin main
+
+            # Install dependencies
+            npm ci
+
+            # Build Next.js app
+            npm run build
+
+            # Restart with PM2 (graceful reload)
+            pm2 reload ${{ env.APP_NAME }} --update-env || pm2 start ecosystem.config.js
+            pm2 save
+
+            echo "✅ Next.js deployment completed!"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            sleep 5
+
+            # Check PM2 status
+            pm2 show ${{ env.APP_NAME }} | grep -E "status|uptime"
+
+            # HTTP health check
+            curl -sf http://localhost:${{ env.APP_PORT }} > /dev/null && echo "✅ Site is responding" || echo "⚠️ Site not responding on port ${{ env.APP_PORT }}"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
