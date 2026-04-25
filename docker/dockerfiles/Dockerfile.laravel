@@ -1,0 +1,117 @@
+# ============================================================
+# Dockerfile for Laravel Application
+# ============================================================
+#
+# Multi-stage build: composer install → production image
+#
+# Build:  docker build -f Dockerfile.laravel -t myapp .
+# Run:    docker-compose up -d  (use with docker-compose.laravel.yml)
+#
+# ============================================================
+
+# ── Stage 1: Composer dependencies ──────────────────────────
+FROM composer:2 AS vendor
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
+RUN composer install \
+    --no-dev \
+    --no-interaction \
+    --no-scripts \
+    --no-autoloader \
+    --prefer-dist
+
+COPY . .
+RUN composer dump-autoload --optimize --no-dev
+
+# ── Stage 2: Frontend assets (if using Vite/Mix) ───────────
+FROM node:20-alpine AS frontend
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ── Stage 3: Production image ──────────────────────────────
+FROM php:8.2-fpm-alpine AS production
+
+# Install PHP extensions
+RUN apk add --no-cache \
+        libpng-dev \
+        libjpeg-turbo-dev \
+        freetype-dev \
+        libzip-dev \
+        icu-dev \
+        oniguruma-dev \
+        libxml2-dev \
+        curl-dev \
+        linux-headers \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        pdo \
+        pdo_mysql \
+        pdo_pgsql \
+        gd \
+        zip \
+        intl \
+        mbstring \
+        curl \
+        opcache \
+        bcmath \
+        xml \
+        pcntl \
+        exif
+
+# Install Redis extension
+RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
+
+# PHP production config
+RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+RUN echo "upload_max_filesize = 50M" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "post_max_size = 52M" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "memory_limit = 512M" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "max_execution_time = 120" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "opcache.enable = 1" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "opcache.memory_consumption = 256" >> $PHP_INI_DIR/conf.d/laravel.ini \
+    && echo "opcache.validate_timestamps = 0" >> $PHP_INI_DIR/conf.d/laravel.ini
+
+WORKDIR /var/www/html
+
+# Copy app code
+COPY . /var/www/html
+
+# Copy vendor from composer stage
+COPY --from=vendor /app/vendor /var/www/html/vendor
+
+# Copy built frontend assets
+COPY --from=frontend /app/public/build /var/www/html/public/build 
+
+# Create required directories
+RUN mkdir -p \
+    storage/app/public \
+    storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/logs \
+    bootstrap/cache
+
+# Set permissions
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 775 storage bootstrap/cache
+
+# Cache config, routes, views (speeds up production)
+# Note: only works if .env is available at build time or you run these at container start
+# RUN php artisan config:cache \
+#     && php artisan route:cache \
+#     && php artisan view:cache
+
+EXPOSE 9000
+
+CMD ["php-fpm"]

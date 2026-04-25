@@ -1,0 +1,126 @@
+# ============================================================
+# Docker Compose — NestJS + Nginx + PostgreSQL + Redis + Queue
+# ============================================================
+# Usage:
+#   cp docker-compose.nestjs.yml /var/www/apps/yourapp/docker-compose.yml
+#   cd /var/www/apps/yourapp
+#   docker compose up -d
+#   docker compose exec app npx prisma migrate deploy   # If using Prisma
+# ============================================================
+
+services:
+  # ── NestJS Application ──────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: myapp-nestjs
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DATABASE_URL: postgresql://${DB_USERNAME:-myapp_user}:${DB_PASSWORD:-secret}@postgres:5432/${DB_DATABASE:-myapp_db}
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+  # ── Nginx Reverse Proxy ─────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: myapp-nginx
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-80}:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # SSL:
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - app-network
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # ── PostgreSQL ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: myapp-postgres
+    restart: unless-stopped
+    ports:
+      - "${DB_EXTERNAL_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-myapp_db}
+      POSTGRES_USER: ${DB_USERNAME:-myapp_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-myapp_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: myapp-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── BullMQ Queue Worker (Uncomment if using queues) ────
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: myapp-worker
+  #   restart: unless-stopped
+  #   command: node dist/worker.js
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     NODE_ENV: production
+  #     DB_HOST: postgres
+  #     REDIS_HOST: redis
+  #     DATABASE_URL: postgresql://${DB_USERNAME:-myapp_user}:${DB_PASSWORD:-secret}@postgres:5432/${DB_DATABASE:-myapp_db}
+  #   networks:
+  #     - app-network
+  #   depends_on:
+  #     - app
+  #     - redis
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge

@@ -1,0 +1,150 @@
+# GitHub Actions CI/CD Pipeline for Docker Deployment
+# ====================================================
+#
+# This workflow builds a Docker image, pushes to a registry (optional),
+# and deploys to your VPS using docker compose.
+#
+# Works with ANY project type — PHP, Laravel, Node.js, Next.js, React, NestJS.
+# The Dockerfile in your project root determines how the app is built.
+#
+# Setup Steps:
+#   1. Copy this file to your project:
+#      .github/workflows/deploy.yml
+#
+#   2. Add these GitHub Secrets (Settings → Secrets → Actions):
+#      - VPS_HOST          → Your VPS IP address
+#      - VPS_USERNAME      → Deploy user (e.g., deploy)
+#      - VPS_SSH_KEY       → Private SSH key
+#
+#   3. Optional (for Docker Hub / GHCR):
+#      - DOCKER_USERNAME   → Docker Hub username
+#      - DOCKER_PASSWORD   → Docker Hub password/token
+#
+#   4. Adjust the variables below
+#
+#   5. First-time VPS setup:
+#      ssh deploy@YOUR_VPS_IP
+#      # Install Docker (see docker/DOCKER-GUIDE.md)
+#      cd /var/www/apps
+#      git clone https://github.com/yourusername/yourrepo.git yourapp
+#      cd yourapp
+#      cp .env.example .env && nano .env
+#      mkdir -p docker/nginx
+#      # Copy the appropriate nginx config from docker/nginx/
+#      docker compose up -d
+#
+# ====================================================
+
+name: Docker Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_NAME: yourapp
+  APP_DIR: /var/www/apps/yourapp
+  COMPOSE_FILE: docker-compose.yml
+
+  # Docker Hub (optional — for image registry)
+  # DOCKER_IMAGE: yourusername/yourapp
+  # Or GitHub Container Registry:
+  # DOCKER_IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ── Build & Test ────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker compose build --no-cache
+          echo "✅ Docker build successful"
+
+      # Run tests inside container (optional):
+      # - name: Run tests
+      #   run: |
+      #     docker compose run --rm app npm test
+      #     # or: docker compose run --rm app php artisan test
+
+      # Push to Docker Hub (optional — for registry-based deploys):
+      # - name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKER_USERNAME }}
+      #     password: ${{ secrets.DOCKER_PASSWORD }}
+      #
+      # - name: Push image
+      #   run: |
+      #     docker tag ${{ env.APP_NAME }} ${{ env.DOCKER_IMAGE }}:latest
+      #     docker tag ${{ env.APP_NAME }} ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+      #     docker push ${{ env.DOCKER_IMAGE }}:latest
+      #     docker push ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
+  # ── Deploy to VPS ───────────────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Starting Docker deployment..."
+
+            cd ${{ env.APP_DIR }}
+
+            # Pull latest code
+            git pull origin main
+
+            # Build and restart containers
+            docker compose build --no-cache
+            docker compose up -d --force-recreate --remove-orphans
+
+            # Run migrations (uncomment the one you need):
+            # Laravel:
+            # docker compose exec -T app php artisan migrate --force
+
+            # Prisma (NestJS/Next.js):
+            # docker compose exec -T app npx prisma migrate deploy
+
+            # Clean up old images
+            docker image prune -f
+
+            echo "✅ Docker deployment completed!"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            sleep 10
+
+            # Check containers are running
+            cd ${{ env.APP_DIR }}
+            docker compose ps
+
+            # HTTP health check
+            curl -sf http://localhost/ > /dev/null && echo "✅ Site is responding" || echo "⚠️ Site not responding"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Docker deployment successful!"
+          else
+            echo "❌ Docker deployment failed!"
+          fi

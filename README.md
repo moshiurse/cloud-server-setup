@@ -39,6 +39,7 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [deploy-reactjs.yml](workflows/deploy-reactjs.yml) | React build + static upload |
 | [deploy-php.yml](workflows/deploy-php.yml) | PHP syntax check + deploy |
 | [deploy-laravel.yml](workflows/deploy-laravel.yml) | Laravel test + migrate + deploy |
+| [deploy-docker.yml](workflows/deploy-docker.yml) | Docker build + push + deploy (any project) |
 
 ### PM2 Process Manager (`pm2/`)
 | File | Description |
@@ -46,6 +47,7 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [ecosystem-nodejs.config.js](pm2/ecosystem-nodejs.config.js) | Node.js (cluster mode) |
 | [ecosystem-nextjs.config.js](pm2/ecosystem-nextjs.config.js) | Next.js (fork mode + standalone) |
 | [ecosystem-nestjs.config.js](pm2/ecosystem-nestjs.config.js) | NestJS (cluster + microservices) |
+| [PM2-GUIDE.md](pm2/PM2-GUIDE.md) | Comprehensive PM2 configuration & usage guide |
 
 ### SSL Guides (`ssl/`)
 | File | Description |
@@ -63,6 +65,29 @@ Complete automation for deploying web apps (Next.js, Node.js, React, PHP, Larave
 | [MONITORING-GUIDE.md](docs/MONITORING-GUIDE.md) | PM2/Nginx monitoring, UptimeRobot, alerts |
 | [LOG-ROTATION-GUIDE.md](docs/LOG-ROTATION-GUIDE.md) | PM2/Nginx/system log rotation, cleanup scripts |
 | [SWAP-SETUP-GUIDE.md](docs/SWAP-SETUP-GUIDE.md) | Swap file setup for low-RAM VPS servers |
+
+### Docker (`docker/`)
+| File | Description |
+|------|-------------|
+| [DOCKER-GUIDE.md](docker/DOCKER-GUIDE.md) | Complete Docker deployment guide (install → production) |
+| **Dockerfiles** (`docker/dockerfiles/`) | |
+| [Dockerfile.php](docker/dockerfiles/Dockerfile.php) | PHP + Apache/Nginx multi-stage |
+| [Dockerfile.laravel](docker/dockerfiles/Dockerfile.laravel) | Laravel + PHP-FPM + queue/scheduler |
+| [Dockerfile.nodejs](docker/dockerfiles/Dockerfile.nodejs) | Node.js (Express/Fastify/Koa) |
+| [Dockerfile.nextjs](docker/dockerfiles/Dockerfile.nextjs) | Next.js standalone output |
+| [Dockerfile.reactjs](docker/dockerfiles/Dockerfile.reactjs) | React → Nginx static serving |
+| [Dockerfile.nestjs](docker/dockerfiles/Dockerfile.nestjs) | NestJS + Prisma/TypeORM |
+| **Compose Files** (`docker/compose/`) | |
+| [docker-compose.php.yml](docker/compose/docker-compose.php.yml) | PHP + Nginx + MySQL |
+| [docker-compose.laravel.yml](docker/compose/docker-compose.laravel.yml) | Laravel + Nginx + MySQL + Redis + queues |
+| [docker-compose.nodejs.yml](docker/compose/docker-compose.nodejs.yml) | Node.js + MongoDB/PostgreSQL + Redis |
+| [docker-compose.nextjs.yml](docker/compose/docker-compose.nextjs.yml) | Next.js + PostgreSQL + Redis |
+| [docker-compose.reactjs.yml](docker/compose/docker-compose.reactjs.yml) | React + Nginx |
+| [docker-compose.nestjs.yml](docker/compose/docker-compose.nestjs.yml) | NestJS + PostgreSQL + Redis |
+| **Docker Nginx** (`docker/nginx/`) | |
+| [nginx-docker-php.conf](docker/nginx/nginx-docker-php.conf) | PHP-FPM container proxy |
+| [nginx-docker-laravel.conf](docker/nginx/nginx-docker-laravel.conf) | Laravel container proxy |
+| [nginx-docker-node.conf](docker/nginx/nginx-docker-node.conf) | Node.js/Next.js/NestJS container proxy |
 
 ## 🚀 Quick Start
 

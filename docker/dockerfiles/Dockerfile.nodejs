@@ -1,0 +1,83 @@
+# ============================================================
+# Dockerfile for Node.js Application (Express / Fastify / Koa)
+# ============================================================
+#
+# Multi-stage build for smaller production image.
+#
+# Build:  docker build -f Dockerfile.nodejs -t myapp .
+# Run:    docker run -p 3000:3000 myapp
+#
+# ============================================================
+
+# ── Stage 1: Dependencies ──────────────────────────────────
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install production dependencies only
+RUN npm ci --omit=dev
+
+# ── Stage 2: Build (if using TypeScript) ───────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY . .
+
+# Build TypeScript (skip if plain JS)
+RUN if [ -f tsconfig.json ]; then npm run build; fi
+
+# ── Stage 3: Production ───────────────────────────────────
+FROM node:20-alpine AS production
+
+# Security: run as non-root
+RUN addgroup -g 1001 -S appgroup \
+    && adduser -S appuser -u 1001 -G appgroup
+
+WORKDIR /app
+
+# Copy production dependencies
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy built app (TypeScript) or source (JavaScript)
+COPY --from=builder /app/dist ./dist 2>/dev/null || true
+COPY --from=builder /app/src ./src 2>/dev/null || true
+COPY --from=builder /app/package.json ./
+
+# Copy other necessary files
+COPY --from=builder /app/.env.example ./.env.example 2>/dev/null || true
+
+# Create logs directory
+RUN mkdir -p logs && chown -R appuser:appgroup /app
+
+USER appuser
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:3000/health || exit 1
+
+# Start the app
+# TypeScript (compiled): node dist/app.js or dist/server.js or dist/index.js
+# JavaScript: node app.js or server.js or src/index.js
+CMD ["node", "dist/index.js"]
+
+# ── Alternative CMD options ─────────────────────────────────
+# Plain JavaScript:
+# CMD ["node", "app.js"]
+# CMD ["node", "server.js"]
+# CMD ["node", "src/index.js"]
+#
+# TypeScript (compiled):
+# CMD ["node", "dist/main.js"]
+# CMD ["node", "dist/server.js"]
