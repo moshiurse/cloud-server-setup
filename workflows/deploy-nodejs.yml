@@ -1,0 +1,150 @@
+# GitHub Actions CI/CD Pipeline for Node.js Application
+# =====================================================
+#
+# This workflow deploys a Node.js app (Express, Fastify, Koa, NestJS, etc.)
+# to your VPS. The app runs as a background process managed by PM2.
+#
+# Setup Steps:
+#   1. Copy this file to your Node.js project:
+#      .github/workflows/deploy.yml
+#
+#   2. Add these GitHub Secrets (Settings → Secrets → Actions):
+#      - VPS_HOST        → Your VPS IP address (e.g., 123.45.67.89)
+#      - VPS_USERNAME    → Your deploy user (e.g., deploy)
+#      - VPS_SSH_KEY     → Private SSH key for the deploy user
+#
+#   3. Adjust the variables below:
+#      - APP_NAME        → Your PM2 app name
+#      - APP_DIR         → Path on VPS where your app lives
+#      - NODE_VERSION    → Node.js version to use
+#
+#   4. First-time server setup:
+#      ssh deploy@YOUR_VPS_IP
+#      cd /var/www/apps
+#      git clone https://github.com/yourusername/yourrepo.git yourapp
+#      cd yourapp
+#      npm install --production
+#      # Create ecosystem.config.js (see nginx/nginx-nodejs.conf for example)
+#      mkdir logs
+#      pm2 start ecosystem.config.js
+#      pm2 save && pm2 startup
+#      # Setup Nginx using nginx/nginx-nodejs.conf template
+#
+# =====================================================
+
+name: Deploy Node.js App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_NAME: yourapp
+  APP_DIR: /var/www/apps/yourapp
+  NODE_VERSION: '20'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Uncomment if your app needs services for testing:
+    # services:
+    #   mysql:
+    #     image: mysql:8.0
+    #     env:
+    #       MYSQL_ROOT_PASSWORD: testpass
+    #       MYSQL_DATABASE: testdb
+    #     ports:
+    #       - 3306:3306
+    #     options: >-
+    #       --health-cmd="mysqladmin ping"
+    #       --health-interval=10s
+    #       --health-timeout=5s
+    #       --health-retries=3
+    #   redis:
+    #     image: redis:7
+    #     ports:
+    #       - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint --if-present
+
+      - name: Run tests
+        run: npm test --if-present
+        env:
+          NODE_ENV: test
+          # Add test environment variables as needed:
+          # DATABASE_URL: mysql://root:testpass@localhost:3306/testdb
+          # REDIS_URL: redis://localhost:6379
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Starting Node.js deployment..."
+
+            cd ${{ env.APP_DIR }}
+
+            # Pull latest code
+            git pull origin main
+
+            # Install production dependencies
+            npm ci --production
+
+            # Run database migrations (if applicable)
+            # npm run migrate --if-present
+
+            # Restart app with PM2 (zero-downtime reload for cluster mode)
+            pm2 reload ${{ env.APP_NAME }} --update-env || pm2 start ecosystem.config.js
+            pm2 save
+
+            echo "✅ Node.js deployment completed!"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            # Wait for app to start
+            sleep 5
+
+            # Check PM2 status
+            pm2 show ${{ env.APP_NAME }} | grep -E "status|uptime"
+
+            # HTTP health check (adjust URL/port as needed)
+            curl -sf http://localhost:3000/health || echo "⚠️ Health check endpoint not available"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi

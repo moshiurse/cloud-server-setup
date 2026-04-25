@@ -140,7 +140,7 @@ pm2 startup  # Follow the instructions shown
 sudo nano /etc/nginx/sites-available/myapp
 ```
 
-Paste the nginx config (from nginx-nextjs.conf file), replacing:
+Paste the nginx config (from nginx/nginx-nextjs.conf file), replacing:
 - `yourdomain.com` with your actual domain
 - Port `3000` if your app uses different port
 

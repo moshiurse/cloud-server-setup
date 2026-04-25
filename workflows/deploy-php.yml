@@ -1,0 +1,178 @@
+# GitHub Actions CI/CD Pipeline for Raw PHP Application
+# =====================================================
+#
+# This workflow deploys a raw PHP project (no framework) to your VPS.
+# The app is served by Nginx + PHP-FPM directly.
+#
+# Setup Steps:
+#   1. Copy this file to your PHP project:
+#      .github/workflows/deploy.yml
+#
+#   2. Add these GitHub Secrets (Settings → Secrets → Actions):
+#      - VPS_HOST        → Your VPS IP address (e.g., 123.45.67.89)
+#      - VPS_USERNAME    → Your deploy user (e.g., deploy)
+#      - VPS_SSH_KEY     → Private SSH key for the deploy user
+#
+#   3. Adjust the variables below:
+#      - APP_DIR         → Path on VPS where your PHP app lives
+#      - PHP_VERSION     → PHP version to use in CI
+#
+#   4. First-time server setup:
+#      ssh deploy@YOUR_VPS_IP
+#      cd /var/www/apps
+#      git clone https://github.com/yourusername/yourrepo.git yourapp
+#      cd yourapp
+#      composer install --no-dev --optimize-autoloader  # if using Composer
+#      cp .env.example .env  # if applicable
+#      # Setup Nginx using nginx/nginx-php.conf template
+#      # Ensure PHP-FPM is running: sudo systemctl status php8.2-fpm
+#
+# =====================================================
+
+name: Deploy PHP App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  APP_DIR: /var/www/apps/yourapp
+  PHP_VERSION: '8.2'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Uncomment if your app needs MySQL for testing:
+    # services:
+    #   mysql:
+    #     image: mysql:8.0
+    #     env:
+    #       MYSQL_ROOT_PASSWORD: testpass
+    #       MYSQL_DATABASE: testdb
+    #     ports:
+    #       - 3306:3306
+    #     options: >-
+    #       --health-cmd="mysqladmin ping"
+    #       --health-interval=10s
+    #       --health-timeout=5s
+    #       --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, pdo, pdo_mysql, xml, curl, zip, gd
+          coverage: none
+
+      - name: Validate composer.json
+        run: |
+          if [ -f composer.json ]; then
+            composer validate --strict
+          else
+            echo "No composer.json found, skipping validation"
+          fi
+
+      - name: Install Composer dependencies
+        run: |
+          if [ -f composer.json ]; then
+            composer install --prefer-dist --no-progress --no-suggest
+          else
+            echo "No composer.json found, skipping install"
+          fi
+
+      - name: Check PHP syntax errors
+        run: |
+          find . -name "*.php" -not -path "./vendor/*" -print0 | xargs -0 -n1 php -l
+
+      - name: Run PHPUnit tests
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            vendor/bin/phpunit --no-coverage
+          else
+            echo "No PHPUnit config found, skipping tests"
+          fi
+
+      - name: Run PHP CodeSniffer
+        run: |
+          if [ -f phpcs.xml ] || [ -f phpcs.xml.dist ] || [ -f .phpcs.xml ]; then
+            vendor/bin/phpcs
+          else
+            echo "No PHPCS config found, skipping"
+          fi
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Starting PHP deployment..."
+
+            cd ${{ env.APP_DIR }}
+
+            # Enable maintenance mode (if you have one)
+            # touch public/maintenance.flag
+
+            # Pull latest code
+            git pull origin main
+
+            # Install/update Composer dependencies (if using Composer)
+            if [ -f composer.json ]; then
+              composer install --no-dev --optimize-autoloader --no-interaction
+            fi
+
+            # Set proper permissions
+            sudo chown -R www-data:www-data storage/ 2>/dev/null || true
+            sudo chown -R www-data:www-data uploads/ 2>/dev/null || true
+            find . -type f -name "*.php" -exec chmod 644 {} \;
+            find . -type d -exec chmod 755 {} \;
+
+            # Restart PHP-FPM to clear opcache
+            sudo systemctl reload php8.2-fpm
+
+            # Reload Nginx
+            sudo systemctl reload nginx
+
+            # Disable maintenance mode
+            # rm -f public/maintenance.flag
+
+            echo "✅ PHP deployment completed!"
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            # Check PHP-FPM is running
+            sudo systemctl is-active php8.2-fpm
+
+            # Check Nginx is running
+            sudo systemctl is-active nginx
+
+            # HTTP health check
+            curl -sf http://localhost/ > /dev/null && echo "✅ Site is responding" || echo "⚠️ Site not responding"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi

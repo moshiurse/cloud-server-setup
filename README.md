@@ -7,8 +7,9 @@ Complete automation for deploying Next.js apps on a VPS with one script.
 1. **vps-setup.sh** - Automated VPS setup script
 2. **DEPLOYMENT-GUIDE.md** - Complete step-by-step guide
 3. **CHEATSHEET.md** - Quick reference for common commands
-4. **nginx-nextjs.conf** - Nginx configuration template
-5. **.github-workflows-deploy.yml** - GitHub Actions CI/CD workflow
+4. **nginx/** - Nginx configuration templates (Next.js, PHP, Node.js, React.js)
+5. **workflows/** - GitHub Actions CI/CD pipelines (React, Node.js, PHP, Laravel)
+6. **.github-workflows-deploy.yml** - GitHub Actions CI/CD workflow (Next.js)
 
 ## 🚀 Quick Start
 
@@ -132,8 +133,8 @@ pm2 start ecosystem.config.js
 
 ### Setup Nginx
 ```bash
-# Use nginx-nextjs.conf template
-sudo cp nginx-nextjs.conf /etc/nginx/sites-available/myapp
+# Use the appropriate nginx template from nginx/ folder
+sudo cp nginx/nginx-nextjs.conf /etc/nginx/sites-available/myapp
 # Edit domain and port
 sudo nano /etc/nginx/sites-available/myapp
 # Enable site
