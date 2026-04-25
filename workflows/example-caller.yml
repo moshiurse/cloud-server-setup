@@ -1,0 +1,103 @@
+# ============================================================================
+# Example: Calling the Reusable Deploy Workflow
+# ============================================================================
+#
+# Copy this file into your project at .github/workflows/deploy.yml and
+# customize the inputs below for your app.
+#
+# Prerequisites:
+#   1. The reusable workflow must be accessible to your repo. Either:
+#      a. It lives in the same repo, OR
+#      b. It lives in a shared repo (e.g., your-org/shared-workflows) and
+#         that repo's workflow permissions allow callers from your org.
+#
+#   2. Add these secrets to your repo (Settings → Secrets → Actions):
+#        VPS_HOST, VPS_USERNAME, VPS_SSH_KEY
+#      Optional: VPS_PORT, SLACK_WEBHOOK
+#
+# ============================================================================
+
+name: Deploy My App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Example 1: Next.js app with Prisma migrations
+  # ─────────────────────────────────────────────
+  deploy-nextjs:
+    uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+    with:
+      app_type: nextjs
+      app_path: /var/www/apps/my-nextjs-app
+      node_version: '20'
+      build_command: 'npm run build'
+      pm2_config: ecosystem.config.js
+      run_migrations: true
+      migration_command: 'npx prisma migrate deploy'
+    secrets: inherit   # passes VPS_HOST, VPS_USERNAME, VPS_SSH_KEY, etc.
+
+  # ─────────────────────────────────────────────
+  # Example 2: Laravel app
+  # ─────────────────────────────────────────────
+  # deploy-laravel:
+  #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+  #   with:
+  #     app_type: laravel
+  #     app_path: /var/www/apps/my-laravel-app
+  #     php_version: '8.2'
+  #     run_migrations: true
+  #   secrets: inherit
+
+  # ─────────────────────────────────────────────
+  # Example 3: Plain Node.js / Express API
+  # ─────────────────────────────────────────────
+  # deploy-api:
+  #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+  #   with:
+  #     app_type: nodejs
+  #     app_path: /var/www/apps/my-api
+  #     node_version: '20'
+  #     install_command: 'npm ci'
+  #     test_command: 'npm test'
+  #     pm2_config: ecosystem.config.js
+  #   secrets: inherit
+
+  # ─────────────────────────────────────────────
+  # Example 4: React SPA (Vite)
+  # ─────────────────────────────────────────────
+  # deploy-frontend:
+  #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+  #   with:
+  #     app_type: reactjs
+  #     app_path: /var/www/apps/my-frontend
+  #     build_command: 'npm run build'
+  #   secrets: inherit
+
+  # ─────────────────────────────────────────────
+  # Example 5: NestJS API with TypeORM
+  # ─────────────────────────────────────────────
+  # deploy-nestjs:
+  #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+  #   with:
+  #     app_type: nestjs
+  #     app_path: /var/www/apps/my-nestjs-api
+  #     node_version: '20'
+  #     pm2_config: ecosystem.config.js
+  #     run_migrations: true
+  #     migration_command: 'npm run typeorm migration:run'
+  #   secrets: inherit
+
+  # ─────────────────────────────────────────────
+  # Example 6: Raw PHP app (no framework)
+  # ─────────────────────────────────────────────
+  # deploy-php:
+  #   uses: your-org/shared-workflows/.github/workflows/reusable-deploy.yml@main
+  #   with:
+  #     app_type: php
+  #     app_path: /var/www/apps/my-php-site
+  #     php_version: '8.2'
+  #   secrets: inherit

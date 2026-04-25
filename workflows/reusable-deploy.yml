@@ -1,0 +1,404 @@
+# ============================================================================
+# Reusable GitHub Actions Workflow: Deploy to VPS
+# ============================================================================
+#
+# A single, callable workflow that handles CI/CD for all supported app types:
+#   nodejs, nextjs, nestjs, php, laravel, reactjs
+#
+# Instead of duplicating deploy logic in every project, each project calls
+# this workflow with its specific inputs and inherits the secrets.
+#
+# HOW TO USE:
+#   1. Place this file in a central repo (e.g., your-org/shared-workflows)
+#      at .github/workflows/reusable-deploy.yml
+#
+#   2. In each project repo, create a caller workflow (see example-caller.yml)
+#      that triggers this workflow with `workflow_call`.
+#
+#   3. Add these GitHub Secrets to each project repo (or at the org level):
+#        VPS_HOST      – VPS IP address or hostname
+#        VPS_USERNAME  – SSH user for deployment
+#        VPS_SSH_KEY   – Private SSH key for the deploy user
+#        VPS_PORT      – SSH port (optional, defaults to 22)
+#        SLACK_WEBHOOK – Slack incoming webhook URL (optional)
+#
+# ============================================================================
+
+name: Reusable VPS Deploy
+
+on:
+  workflow_call:
+    inputs:
+      # ── Required ──────────────────────────────────────────────────────────
+      app_type:
+        description: 'Application type: nodejs, nextjs, nestjs, php, laravel, reactjs'
+        required: true
+        type: string
+
+      app_path:
+        description: 'Absolute path to the app on the VPS (e.g., /var/www/apps/myapp)'
+        required: true
+        type: string
+
+      # ── Node.js options ───────────────────────────────────────────────────
+      node_version:
+        description: 'Node.js version (ignored for php/laravel)'
+        required: false
+        type: string
+        default: '20'
+
+      install_command:
+        description: 'Command to install dependencies'
+        required: false
+        type: string
+        default: 'npm ci'
+
+      test_command:
+        description: 'Command to run tests'
+        required: false
+        type: string
+        default: 'npm test'
+
+      build_command:
+        description: 'Command to build the application'
+        required: false
+        type: string
+        default: 'npm run build'
+
+      pm2_config:
+        description: 'PM2 ecosystem config filename (e.g., ecosystem.config.js)'
+        required: false
+        type: string
+        default: 'ecosystem.config.js'
+
+      # ── PHP options ───────────────────────────────────────────────────────
+      php_version:
+        description: 'PHP version (only used for php/laravel app types)'
+        required: false
+        type: string
+        default: '8.2'
+
+      # ── Database / Migrations ─────────────────────────────────────────────
+      run_migrations:
+        description: 'Whether to run database migrations during deploy'
+        required: false
+        type: boolean
+        default: false
+
+      migration_command:
+        description: 'Migration command to run (e.g., "npx prisma migrate deploy" or "php artisan migrate --force")'
+        required: false
+        type: string
+        default: ''
+
+    # Secrets are inherited from the caller workflow via `secrets: inherit`.
+    # Declaring them here documents what the workflow expects.
+    secrets:
+      VPS_HOST:
+        required: true
+      VPS_USERNAME:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+      VPS_PORT:
+        required: false
+      SLACK_WEBHOOK:
+        required: false
+
+# ============================================================================
+# JOBS
+# ============================================================================
+jobs:
+  # ── Job 1: Setup, Install, Test, Build ────────────────────────────────────
+  ci:
+    name: CI – Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Node.js setup (nodejs / nextjs / nestjs / reactjs) ──
+      - name: Setup Node.js
+        if: contains(fromJSON('["nodejs","nextjs","nestjs","reactjs"]'), inputs.app_type)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      # ── PHP setup (php / laravel) ──
+      - name: Setup PHP
+        if: contains(fromJSON('["php","laravel"]'), inputs.app_type)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+          extensions: mbstring, pdo, pdo_mysql, xml, curl, zip, gd, bcmath
+          coverage: none
+
+      # ── Install dependencies ──
+      - name: Install dependencies (Node.js)
+        if: contains(fromJSON('["nodejs","nextjs","nestjs","reactjs"]'), inputs.app_type)
+        run: ${{ inputs.install_command }}
+
+      - name: Install dependencies (PHP / Composer)
+        if: contains(fromJSON('["php","laravel"]'), inputs.app_type)
+        run: |
+          if [ -f composer.json ]; then
+            composer install --prefer-dist --no-progress --no-suggest
+          else
+            echo "No composer.json found, skipping Composer install"
+          fi
+
+      # ── Prepare Laravel environment for tests ──
+      - name: Prepare Laravel environment
+        if: inputs.app_type == 'laravel'
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # ── Run tests ──
+      - name: Run tests (Node.js)
+        if: contains(fromJSON('["nodejs","nextjs","nestjs","reactjs"]'), inputs.app_type)
+        run: ${{ inputs.test_command }} --if-present
+        env:
+          CI: true
+          NODE_ENV: test
+
+      - name: Run tests (PHP)
+        if: inputs.app_type == 'php'
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            vendor/bin/phpunit --no-coverage
+          else
+            echo "No PHPUnit config found, skipping tests"
+          fi
+
+      - name: Run tests (Laravel)
+        if: inputs.app_type == 'laravel'
+        run: php artisan test
+
+      # ── Build (Node.js-based apps only) ──
+      - name: Build application
+        if: contains(fromJSON('["nodejs","nextjs","nestjs","reactjs"]'), inputs.app_type)
+        run: ${{ inputs.build_command }}
+        env:
+          CI: true
+
+  # ── Job 2: Deploy to VPS via SSH ──────────────────────────────────────────
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+    steps:
+      # ── Deploy: Node.js / NestJS (PM2-managed process, pull & restart) ──
+      - name: Deploy Node.js / NestJS app
+        if: contains(fromJSON('["nodejs","nestjs"]'), inputs.app_type)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            echo "🚀 Deploying ${{ inputs.app_type }} app..."
+
+            cd ${{ inputs.app_path }}
+            git pull origin main
+
+            ${{ inputs.install_command }} --production
+
+            # Migrations
+            if [ "${{ inputs.run_migrations }}" = "true" ] && [ -n "${{ inputs.migration_command }}" ]; then
+              echo "🗃️ Running migrations..."
+              ${{ inputs.migration_command }}
+            fi
+
+            # Restart via PM2
+            pm2 reload ${{ inputs.pm2_config }} --update-env || pm2 start ${{ inputs.pm2_config }}
+            pm2 save
+
+            echo "✅ Deployment complete!"
+
+      # ── Deploy: Next.js (pull, install, build on server, restart PM2) ──
+      - name: Deploy Next.js app
+        if: inputs.app_type == 'nextjs'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            echo "🚀 Deploying Next.js app..."
+
+            cd ${{ inputs.app_path }}
+            git pull origin main
+
+            ${{ inputs.install_command }}
+            ${{ inputs.build_command }}
+
+            # Migrations
+            if [ "${{ inputs.run_migrations }}" = "true" ] && [ -n "${{ inputs.migration_command }}" ]; then
+              echo "🗃️ Running migrations..."
+              ${{ inputs.migration_command }}
+            fi
+
+            pm2 reload ${{ inputs.pm2_config }} --update-env || pm2 start ${{ inputs.pm2_config }}
+            pm2 save
+
+            echo "✅ Deployment complete!"
+
+      # ── Deploy: React.js (pull, install, build on server, copy to webroot) ──
+      - name: Deploy React.js app
+        if: inputs.app_type == 'reactjs'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            echo "🚀 Deploying React.js app..."
+
+            cd ${{ inputs.app_path }}
+            git pull origin main
+
+            ${{ inputs.install_command }}
+            ${{ inputs.build_command }}
+
+            # Reload Nginx to pick up new static files
+            sudo systemctl reload nginx
+
+            echo "✅ Deployment complete!"
+
+      # ── Deploy: PHP (no framework) ──
+      - name: Deploy PHP app
+        if: inputs.app_type == 'php'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            echo "🚀 Deploying PHP app..."
+
+            cd ${{ inputs.app_path }}
+            git pull origin main
+
+            if [ -f composer.json ]; then
+              composer install --no-dev --optimize-autoloader --no-interaction
+            fi
+
+            # Set permissions
+            sudo chown -R www-data:www-data . 2>/dev/null || true
+            find . -type f -name "*.php" -exec chmod 644 {} \;
+            find . -type d -exec chmod 755 {} \;
+
+            # Restart PHP-FPM & Nginx
+            sudo systemctl reload php${{ inputs.php_version }}-fpm
+            sudo systemctl reload nginx
+
+            echo "✅ Deployment complete!"
+
+      # ── Deploy: Laravel ──
+      - name: Deploy Laravel app
+        if: inputs.app_type == 'laravel'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            echo "🚀 Deploying Laravel app..."
+
+            cd ${{ inputs.app_path }}
+
+            # Maintenance mode
+            php artisan down --refresh=15
+
+            git pull origin main
+
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            # Migrations
+            if [ "${{ inputs.run_migrations }}" = "true" ]; then
+              php artisan migrate --force
+            fi
+
+            # Rebuild caches
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan event:cache
+            php artisan cache:clear
+
+            # Queue & storage
+            php artisan queue:restart 2>/dev/null || true
+            php artisan storage:link 2>/dev/null || true
+
+            # Permissions
+            sudo chown -R www-data:www-data storage bootstrap/cache
+            sudo chmod -R 775 storage bootstrap/cache
+
+            # Restart PHP-FPM
+            sudo systemctl reload php${{ inputs.php_version }}-fpm
+
+            # Back online
+            php artisan up
+
+            echo "✅ Deployment complete!"
+
+      # ── Health Check (runs for every app type) ──
+      - name: Health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            sleep 5
+            echo "🏥 Running health check..."
+
+            # PM2-managed apps: check process status
+            if echo "nodejs nextjs nestjs" | grep -qw "${{ inputs.app_type }}"; then
+              pm2 show ${{ inputs.pm2_config }} 2>/dev/null | grep -E "status|uptime" || true
+            fi
+
+            # PHP-FPM apps: check service status
+            if echo "php laravel" | grep -qw "${{ inputs.app_type }}"; then
+              sudo systemctl is-active php${{ inputs.php_version }}-fpm && echo "✅ PHP-FPM is running"
+              sudo systemctl is-active nginx && echo "✅ Nginx is running"
+            fi
+
+            # HTTP health check (works for all types)
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ || echo "000")
+            if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "301" ] || [ "$HTTP_STATUS" = "302" ]; then
+              echo "✅ Health check passed (HTTP $HTTP_STATUS)"
+            else
+              echo "⚠️ Health check returned HTTP $HTTP_STATUS — verify manually"
+            fi
+
+  # ── Job 3: Slack Notification (optional) ──────────────────────────────────
+  notify:
+    name: Slack Notification
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always() && secrets.SLACK_WEBHOOK
+    steps:
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ needs.deploy.result }}
+          fields: repo,message,commit,author,action,ref
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
