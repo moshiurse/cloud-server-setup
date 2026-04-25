@@ -10,6 +10,7 @@ Complete automation for deploying Next.js apps on a VPS with one script.
 4. **nginx/** - Nginx configuration templates (Next.js, PHP, Node.js, React.js)
 5. **workflows/** - GitHub Actions CI/CD pipelines (React, Node.js, PHP, Laravel)
 6. **.github-workflows-deploy.yml** - GitHub Actions CI/CD workflow (Next.js)
+7. **ssl/** - SSL/TLS certificate guides (setup, wildcard, troubleshooting)
 
 ## 🚀 Quick Start
 
@@ -146,6 +147,8 @@ sudo nginx -t && sudo systemctl reload nginx
 ```bash
 sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
 ```
+
+> 📖 **Full SSL Guide:** See [ssl/SSL-SETUP-GUIDE.md](ssl/SSL-SETUP-GUIDE.md) for detailed instructions, wildcard certs, and troubleshooting.
 
 ### Setup CI/CD
 ```bash

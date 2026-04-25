@@ -162,6 +162,9 @@ sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
 
 Follow the prompts. Certbot will automatically configure HTTPS!
 
+> 📖 **Full SSL Guide:** See [ssl/SSL-SETUP-GUIDE.md](ssl/SSL-SETUP-GUIDE.md) for detailed setup, wildcard certificates, and troubleshooting.
+> For multi-domain or wildcard SSL, see [ssl/SSL-WILDCARD-AND-MULTI-DOMAIN.md](ssl/SSL-WILDCARD-AND-MULTI-DOMAIN.md).
+
 #### 7. Test Your Site
 Visit: `https://yourdomain.com`
 
@@ -411,6 +414,8 @@ sudo nginx -t
 sudo certbot renew
 sudo systemctl reload nginx
 ```
+
+> 📖 See [ssl/SSL-TROUBLESHOOTING.md](ssl/SSL-TROUBLESHOOTING.md) for detailed fixes.
 
 ### High Memory Usage
 ```bash
